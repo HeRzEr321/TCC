@@ -1,0 +1,171 @@
+import folium                       # Biblioteca para criação de mapas interativos
+import geopandas as gpd            # Biblioteca para manipulação de dados geoespaciais
+import webbrowser                  # Biblioteca para abrir o navegador automaticamente
+import tkinter as tk               # Biblioteca para interface gráfica (GUI)
+from tkinter import ttk            # Submódulo do tkinter para widgets com estilo (como combobox)
+import branca.colormap as cm       # Biblioteca para colormaps em mapas folium
+
+# Função para definir uma cor com base no número de casos
+def definir_cor(cores):
+    if cores == 0:
+        return '#FFFFFF'           # Branco para zero casos
+    elif cores < 100:
+        return '#ffcccc'
+    elif cores < 500:
+        return '#ff9999'
+    elif cores < 1000:
+        return '#ff6666'
+    elif cores < 5000:
+        return '#ff3333'
+    elif cores < 10000:
+        return '#cc0000'
+    elif cores < 20000:
+        return '#990000'
+    elif cores < 50000:
+        return '#660000'
+    else:
+        return '#330000'           # Cor mais escura para número muito alto de casos
+
+# Função principal para criar o mapa com os dados de dengue
+def criar_mapa(estados, loop, intervalo_anos):
+    # Lê os arquivos shapefile com dados de municípios e casos de dengue
+    sedes = gpd.read_file('dengue dados atuais.shp')
+    polig = gpd.read_file('dengue poligonos municipios_a.shp')
+
+    # Filtra os dados do estado selecionado pelo usuário
+    sedes = sedes[sedes['UF'].str.lower() == estados.lower()].copy()
+    polig = polig[polig['SIGLA_UF'].str.upper() == estados.upper()].copy()
+
+    # Define o sistema de coordenadas se não estiver definido
+    #(para corrigir bug de carregamento dos dados. altere para o correspondente dos seus dados)
+    if sedes.crs is None:
+        sedes.set_crs(epsg=4674, inplace=True)
+    if polig.crs is None:
+        polig.set_crs(epsg=4674, inplace=True)
+
+    # Converte para sistema de coordenadas WGS84 (latitude/longitude)
+    sedes = sedes.to_crs(epsg=4326)
+    polig = polig.to_crs(epsg=4326)
+
+    # Calcula o centroide do estado para centralizar o mapa
+    centroide_est = polig.geometry.union_all().centroid
+
+    # Cria o mapa folium
+    mapa = folium.Map(location=[centroide_est.y, centroide_est.x], zoom_start=7, tiles=None, control_scale=True)
+
+    # Adiciona camada de mapa base de background (Google Maps modo mapa)
+    folium.raster_layers.TileLayer(
+        tiles='http://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+        attr='Google',
+        name='Mapa',
+        max_zoom=20,
+        subdomains=['mt0', 'mt1', 'mt2', 'mt3'],
+        overlay=False,
+        control=True,
+    ).add_to(mapa)
+
+    # Adiciona camada de background de satélite (Google Maps modo satélite)
+    folium.raster_layers.TileLayer(
+        tiles='http://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+        attr='Google',
+        name='Satélite',
+        max_zoom=20,
+        subdomains=['mt0', 'mt1', 'mt2', 'mt3'],
+        overlay=False,
+        control=True
+    ).add_to(mapa)
+
+    # Define intervalo de anos baseado na seleção do usuário
+    if intervalo_anos == "2014-2019":
+        ano_ini, ano_fim = 2014, 2019
+    else:
+        ano_ini, ano_fim = 2020, 2024
+
+    # Loop pelos anos do intervalo selecionado
+    for ano in range(ano_ini, ano_fim + 1):
+        col_ano = f"i{ano}"                         # Nome da coluna no shapefile com dados do ano
+        show_layer = (ano == ano_fim)              # Mostra apenas a camada do último ano por padrão
+        camada = folium.FeatureGroup(name=f'Casos Dengue em {ano}', show=show_layer)
+
+        # Função de estilo baseada na quantidade de casos
+        def make_style_function(col):
+            def style_function(feature):
+                casos = feature['properties'].get(col, 0)
+                cor = definir_cor(casos)
+                return {'fillColor': cor, 'color': 'black', 'weight': 0.5, 'fillOpacity': 0.8}
+            return style_function
+
+        # Adiciona camada GeoJson ao mapa para o ano
+        folium.GeoJson(
+            polig,
+            style_function=make_style_function(col_ano),
+            highlight_function=lambda feature: {'weight': 4, 'color': 'black', 'fillOpacity': 0.8},
+            tooltip=folium.features.GeoJsonTooltip(
+                fields=['municipio', col_ano],
+                aliases=['Município:', f'Casos de Dengue ({ano}):'],
+                localize=True,
+                sticky=True
+            )
+        ).add_to(camada)
+
+        camada.add_to(mapa)  # Adiciona a camada ao mapa
+
+    # Cria uma legenda (colormap) com as cores e escalas definidas
+    colormap = cm.StepColormap(
+        colors=['#ffffff', '#ffcccc', '#ff9999', '#ff6666', '#ff3333', '#cc0000', '#990000', '#660000', '#330000'],
+        index=[0, 100, 500, 1000, 5000, 10000, 20000, 50000, polig["i2024"].max()],
+        vmin=0,
+        vmax=polig["i2024"].max(),
+        caption='Casos de Dengue'
+    )
+
+    colormap.add_to(mapa)  # Adiciona a legenda ao mapa
+
+    folium.LayerControl(collapsed=False).add_to(mapa)  # Menu para seleção das camadas de dados ativas
+
+    # Salva o mapa em formato HTML e abre o mapa gerado no navegador que estiver aberto (caso não tenha um, abrirá o padrão)
+    Mapa_Casos_Dengue = f"Mapa_Casos_Dengue_{estados.upper()}.html"
+    mapa.save(Mapa_Casos_Dengue)
+    webbrowser.open(Mapa_Casos_Dengue)
+
+    print(f"'{Mapa_Casos_Dengue}' gerado e aberto em seu navegador.")
+
+    loop.destroy()  # Fecha a janela do tkinter
+
+# Função de criação da interface gráfica para seleção dos dados
+def Menu():
+    loop = tk.Tk()  # Cria a janela principal
+    loop.title("Seleção do Estado e Período do Mapa de Dengue")
+
+    L1 = tk.Label(loop, text="Selecione a sigla do estado desejado: ")
+    L1.pack(pady=10)
+
+    # Lista de todos os estados brasileiros e do Distrito  Federal
+    estados = ['AC', 'AL', 'AM', 'AP', 'BA', 'CE', 
+               'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 
+               'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 
+               'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 
+               'SE', 'SP', 'TO']
+    est_var = tk.StringVar(value="SC")  # Valor inicial padrão
+
+    CB = ttk.Combobox(loop, textvariable=est_var, values=estados)
+    CB.pack(pady=10)
+
+    L2 = tk.Label(loop, text="Selecione o período de anos: ")
+    L2.pack(pady=10)
+
+    # Lista de períodos de anos disponíveis
+    periodos = ['2014-2019', '2020-2024']
+    per_var = tk.StringVar(value='2020-2024')  # Valor inicial padrão
+    
+    CB2 = ttk.Combobox(loop, textvariable=per_var, values=periodos)
+    CB2.pack(pady=10)
+
+    # Botão para gerar o mapa interativo com base nos dados selecionados
+    Click = tk.Button(loop, text="Gerar Mapa de Casos de Dengue", command=lambda: criar_mapa(est_var.get(), loop, per_var.get()))
+    Click.pack(pady=10)
+
+    loop.mainloop()  # Inicia o loop da interface gráfica
+
+# Executa a função do menu
+Menu()
